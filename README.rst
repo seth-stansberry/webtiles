@@ -15,11 +15,11 @@ Installation
 ------------
 
 This package uses `setuptools <http://pythonhosted.org/setuptools>`__
-and can be installed with ``pip3``. For example:
+and can be installed with ``pip3``. For example, for a local install
+from the github repo:
 
 ::
 
-    cd webtiles
     pip3 install --user git+https://github.com/gammafunk/webtiles.git
 
 The library will be available on PyPI when it reaches a more
