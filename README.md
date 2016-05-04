@@ -18,7 +18,7 @@ This package uses [setuptools](http://pythonhosted.org/setuptools) and can be
 installed with `pip3`. For example:
 
     cd webtiles
-    pip3 install --user https://github.com/gammafunk/webtiles.git
+    pip3 install --user git+https://github.com/gammafunk/webtiles.git
 
 The library will be available on PyPI when it reaches a more feature-complete
 state.
