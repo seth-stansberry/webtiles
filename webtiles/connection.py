@@ -18,9 +18,30 @@ class WebTilesError(Exception):
     pass
 
 class WebTilesConnection():
-    """A base clase for a connection to a WebTiles server. Classes can inherit
-    from this, extending `handle_message()` to handle additional message types
-    or respond additionally to those `WebTilesConnection` already handles.
+    """A base clase for a connection to a WebTiles server. Inherit from this and
+    extend `handle_message()` to handle additional message types or process
+    those that `WebTilesConnection` already handles. This class handles
+    connecting, logging in, getting a list of games, lobby data, and setting rc
+    files.
+
+    The `websocket` property holds the websocket instance and `websocket_url`
+    the url of the current connection. When logged in through either
+    `connect()` or `send_login()`, the `logged_in` property will be true, and
+    `username` will hold the current username. The game list is only received
+    after login, and is a dict in the `games` property with each key a
+    descriptive name and each value a game type id. The game id is used when
+    playing and setting the rc file.
+
+    For lobby data, `lobby_complete` will be True when the server indicates
+    that it's sent a complete set of entries.. Lobby entries are available in
+    `lobby_entries` and can be retrieved by game username and game id with
+    `get_entry()`. Each entry is a dictionary with keys 'username', 'game_id',
+    'id' (a unique game identifier used by the server), 'idle_time', and
+    'spectator_count'. Additionally the key 'time_last_update' has the time of
+    the last update to the entry.
+
+    Some errors will raise `WebTilesError`, where the first exception argument
+    will be an error message.
 
     """
 
@@ -29,11 +50,13 @@ class WebTilesConnection():
         self.decomp = zlib.decompressobj(-zlib.MAX_WBITS)
         self.websocket = None
         self.logged_in = False
-        self.time_connected = None
         self.websocket_url = None
         self.username = None
         self.password = None
         self.games = {}
+        self.lobby_entries = []
+        self.lobby_complete = False
+
 
     @asyncio.coroutine
     def connect(self, websocket_url, username=None, password=None, *args,
@@ -45,14 +68,13 @@ class WebTilesConnection():
 
         if username and not password:
             raise WebTilesError("Username given but no password given.")
-        
+
         if self.connected():
             raise WebTilesError("Attempted to connect when already connected.")
-        
+
         self.websocket = yield from websockets.connect(websocket_url, *args,
                                                        **kwargs)
         self.websocket_url = websocket_url
-        self.time_connected = time.time()
         if username:
             yield from self.send_login(username, password)
             self.username = username
@@ -63,15 +85,15 @@ class WebTilesConnection():
         """Send the login message. This is usally called by `connect()`, but the
         `send_login()` method can be used to authenticate after connecting
         without credentials. The `logged_in` property will only be True after
-        the server responds with a "login_complete" message and this is handled
-        by `handle_message()`.
+        the server responds with a "login_complete" message when this is
+        handled by `handle_message()`.
 
         """
 
         yield from self.send({"msg"      : "login",
                               "username" : username,
                               "password" : password})
-        self.logged_in = False        
+        self.logged_in = False
         self.username = username
         self.password = password
 
@@ -80,7 +102,6 @@ class WebTilesConnection():
 
         return self.websocket and self.websocket.open
 
-
     @asyncio.coroutine
     def disconnect(self):
         """Close the websocket if it's open and reset the connection state"""
@@ -88,9 +109,10 @@ class WebTilesConnection():
         if self.websocket:
             yield from self.websocket.close()
         self.websocket = None
-        self.time_connected = None
         self.logged_in = False
         self.games = {}
+        self.lobby_entries = []
+        self.lobby_complete = False
 
     @asyncio.coroutine
     def read(self):
@@ -126,13 +148,21 @@ class WebTilesConnection():
 
         return messages
 
+    def get_lobby_entry(self, username, game_id):
+        """Get the lobby entry of a game from `lobby_entries`. """
+
+        for entry in self.lobby_entries:
+            if entry["username"] == username and entry["game_id"] == game_id:
+                return entry
+        return
+
     @asyncio.coroutine
     def update_rc(self, game_id, rc_text):
         """Update the user's RC file on the server. If the connection isn't logged
         in, raise an exception.
 
         """
-        
+
         if not self.logged_in:
             raise WebTilesError(
                 "Attempted to send RC update when not logged in")
@@ -156,10 +186,15 @@ class WebTilesConnection():
     @asyncio.coroutine
     def handle_message(self, message):
         """Given a response message dictionary, handle the message. Returns True
-        if the message as handled by this handler. This method covers only
-        simple, low-level messages and should be extended by any derived
-        classes if used. Notably it does not handle the 'login_fail' message
-        type when authentication is rejected.
+        if the message is handled by this handler. This method can be extended
+        in derived classes to handle other message types or to additional
+        handling, but it must be called for the following message types in
+        order to manage connect state properly: "login_success",
+        "set_game_links", "lobby_entry", "lobby_remove", "lobby_clear",
+        "lobby_complete".
+
+        This method doesn't handle the 'login_fail' message type when
+        authentication is rejected.
 
         """
 
@@ -180,55 +215,10 @@ class WebTilesConnection():
                 self.games[game_name] = game_id
             return True
 
-        return False
-
-class WebTilesLobbyConnection(WebTilesConnection):
-    """Lobby class that watches for lobby data from the WebTiles server, updating
-    its entries. When a complete lobby information is available,
-    `lobby_complete` will be True. Lobby entries are available in
-    `lobby_entries` and can be retrieved by game username and game id with
-    `get_entry()`. Each entry is a dictionary with keys 'username', 'game_id',
-    'id' (a unique game identifier used by the server), 'idle_time', and
-    'spectator_count'. Additionally the key 'time_last_update' has the time of
-    the last update to the entry.
-
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.lobby_entries = []
-        self.lobby_complete = False
-
-    @asyncio.coroutine
-    def disconnect(self):
-        yield from super().disconnect()
-        self.lobby_entries = []
-        self.lobby_complete = False
-
-    def get_entry(self, username, game_id):
-        """Get the lobby entry of a game from `lobby_entries`. """
-
-        for entry in self.lobby_entries:
-            if entry["username"] == username and entry["game_id"] == game_id:
-                return entry
-        return
-
-    @asyncio.coroutine
-    def handle_message(self, message):
-        """In addition to the messages handled by `WebTilesConnection`, this
-        method handles 'lobby_entry', when a lobby entry is received or
-        updated, 'lobby_clear', when the server wants us to flush our lobby
-        data, and 'lobby_complete', when the server has sent us a full set of
-        lobby entries.
-
-        """
-        
-        handled = yield from super().handle_message(message)
-        if handled:
-            return True
 
         if message["msg"] == "lobby_entry":
-            entry = self.get_entry(message["username"], message["game_id"])
+            entry = self.get_lobby_entry(message["username"],
+                                         message["game_id"])
             message["time_last_update"] = time.time()
             if entry:
                 entry.update(message)
@@ -256,10 +246,13 @@ class WebTilesLobbyConnection(WebTilesConnection):
 
 class WebTilesGameConnection(WebTilesConnection):
     """A game webtiles connection. Currently only watching games and basic chat
-    functions are supported. Has a `watching` property that is true when
-    watching a game. The properties `game_username` and `game_id` hold the
-    details of the current game. The set `spectators` holds a list of the
-    distinct spectators, excluding the user of this connection.
+    functions are supported.
+
+    The `watching` property that is true when watching a game, and
+    `game_username` and `game_id` will also be set.
+
+    The set `spectators` holds a set spectators, excluding the user of
+    connection in `username`.
 
     """
 
@@ -312,7 +305,7 @@ class WebTilesGameConnection(WebTilesConnection):
         game. This will work even if no game is currently being watched.
 
         """
-        
+
         yield from self.send({"msg" : "go_lobby"})
         self.watching = False
         self.game_username = None
