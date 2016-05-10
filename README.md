@@ -31,7 +31,7 @@ working example in [updaterc.py](webtiles/updaterc.py), which is installed by
 
 The library is currently extremely simple, with only enough functionality to
 support the [beem](https://github.com/gammafunk/beem) project. It can handle
-the basics of connecting, authentication, reading messages, getting game types,
-and updating RC files through the `WebTilesConnection` class, reading lobby
-data through the `WebTilesLobbyConnection` class), and watching games and
-reading/sending chat messages through the `WebTilesGameConnection` class.
+the basics of connecting, authentication, reading/sending messages, getting
+game types, updating RC files, and reading lobby data through the
+`WebTilesConnection` class, and watching games and reading/sending chat
+messages through the `WebTilesGameConnection` class.
