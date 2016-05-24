@@ -45,8 +45,8 @@ class WebTilesConnection():
 
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.decomp = zlib.decompressobj(-zlib.MAX_WBITS)
         self.websocket = None
         self.logged_in = False
@@ -256,8 +256,8 @@ class WebTilesGameConnection(WebTilesConnection):
 
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.watching = False
         self.game_username = None
         self.game_id = None
