@@ -13,13 +13,13 @@ import os.path
 import re
 import sys
 from urllib.parse import urlparse
-import webtiles
+from webtiles import WebTilesConnection
 
-_log = logging.getLogger(__name__)
+_log = logging.getLogger()
 _log.setLevel(logging.INFO)
 _log.addHandler(logging.StreamHandler())
 
-class RCUpdater(webtiles.WebTilesConnection):
+class RCUpdater(WebTilesConnection):
 
     def __init__(self, websocket_url, username, password, update_games,
                  rc_text):
@@ -36,7 +36,7 @@ class RCUpdater(webtiles.WebTilesConnection):
         messages. When the game list is received, try to update the RC file.
 
         """
-        
+
         yield from self.connect(self.websocket_url, self.username,
                                 self.password)
 
@@ -88,14 +88,14 @@ class RCUpdater(webtiles.WebTilesConnection):
 @asyncio.coroutine
 def run_updates(server_urls, username, password, update_games, rc_text):
     """Handle the update to each server."""
-    
+
     for url in server_urls:
         hostname = urlparse(url).hostname
         _log.info("Updating server %s", hostname)
         updater = RCUpdater(url, username, password, update_games, rc_text)
 
         try:
-            yield from updater.start()        
+            yield from updater.start()
         except Exception as e:
             err_reason = type(e).__name__
             if e.args:

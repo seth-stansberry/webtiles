@@ -1,15 +1,15 @@
 webtiles
 ========
 
-This is a client library for the WebTiles server protocol for the game
+This is a simple client library for the WebTiles server protocol for the game
 [Dungeon Crawl: Stone Soup](http://crawl.develz.org/).
 
 Dependencies
 ------------
 
 * Python 3.3 or later
-* Recent asyncio module (3.4.3 tested)
-* Recent websockets module (3.0 tested)
+* asyncio module (3.4.3 tested)
+* websockets module (3.0 tested)
 
 Installation
 ------------
@@ -30,8 +30,9 @@ working example in [updaterc.py](webtiles/updaterc.py), which is installed by
 `pip3` as the script `update-dcss-rc`.
 
 The library is currently extremely simple, with only enough functionality to
-support the [beem](https://github.com/gammafunk/beem) project. It can handle
-the basics of connecting, authentication, reading/sending messages, getting
-game types, updating RC files, and reading lobby data through the
+support the [beem](https://github.com/gammafunk/beem) and
+[LomLobot](https://github.com/gammafunk/lomlobot) projects. It can handle the
+basics of connecting, authentication, reading/sending messages, getting game
+types, updating RC files, and reading lobby data through the
 `WebTilesConnection` class, and watching games and reading/sending chat
 messages through the `WebTilesGameConnection` class.

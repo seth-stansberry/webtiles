@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import re
-import sys
 import time
 import websockets
 import zlib
@@ -27,8 +26,8 @@ class WebTilesConnection():
     The `websocket` property holds the websocket instance and `websocket_url`
     the url of the current connection. When logged in through either
     `connect()` or `send_login()`, the `logged_in` property will be true, and
-    `username` will hold the current username. The game list is only received
-    after login, and is a dict in the `games` property with each key a
+    `login_username` will hold the current username. The game list is only
+    received after login, and is a dict in the `games` property with each key a
     descriptive name and each value a game type id. The game id is used when
     playing and setting the rc file.
 
@@ -37,8 +36,8 @@ class WebTilesConnection():
     `lobby_entries` and can be retrieved by game username and game id with
     `get_entry()`. Each entry is a dictionary with keys 'username', 'game_id',
     'id' (a unique game identifier used by the server), 'idle_time', and
-    'spectator_count'. Additionally the key 'time_last_update' has the time of
-    the last update to the entry.
+    'spectator_count'. Additionally we add the key 'time_last_update' with the
+    time of the last update to the entry.
 
     Some errors will raise `WebTilesError`, where the first exception argument
     will be an error message.
@@ -51,8 +50,7 @@ class WebTilesConnection():
         self.websocket = None
         self.logged_in = False
         self.websocket_url = None
-        self.username = None
-        self.password = None
+        self.login_username = None
         self.games = {}
         self.lobby_entries = []
         self.lobby_complete = False
@@ -77,8 +75,7 @@ class WebTilesConnection():
         self.websocket_url = websocket_url
         if username:
             yield from self.send_login(username, password)
-            self.username = username
-            self.password = password
+            self.login_username = username
 
     @asyncio.coroutine
     def send_login(self, username, password):
@@ -94,8 +91,7 @@ class WebTilesConnection():
                               "username" : username,
                               "password" : password})
         self.logged_in = False
-        self.username = username
-        self.password = password
+        self.login_username = username
 
     def connected(self):
         """Return true if the websocket is connected."""
@@ -188,12 +184,12 @@ class WebTilesConnection():
         """Given a response message dictionary, handle the message. Returns True
         if the message is handled by this handler. This method can be extended
         in derived classes to handle other message types or to additional
-        handling, but it must be called for the following message types in
-        order to manage connect state properly: "login_success",
+        handling. This base method must be called for the following message
+        types in order to manage connect state properly: "login_success",
         "set_game_links", "lobby_entry", "lobby_remove", "lobby_clear",
         "lobby_complete".
 
-        This method doesn't handle the 'login_fail' message type when
+        This method doesn't handle the "login_fail" message type when
         authentication is rejected.
 
         """
@@ -248,18 +244,28 @@ class WebTilesGameConnection(WebTilesConnection):
     """A game webtiles connection. Currently only watching games and basic chat
     functions are supported.
 
-    The `watching` property that is true when watching a game, and
-    `game_username` and `game_id` will also be set.
+    Call `send_watch_game()` to watch a user's game and check for the
+    `watching` property to be true after we receive confirmation from the
+    server that watching has started. The `watch_username` and `game_id`
+    properties will be set to the username and game id of the current watched
+    game. Note that we can't guarantee that the game id is correct, since
+    WebTiles currently doesn't support specifying which game type to watch if a
+    user has multiple active games.
 
-    The set `spectators` holds a set spectators, excluding the user of
-    connection in `username`.
+    Call `send_stop_watching()` to cease watching a game, or call
+    `send_watch_game()` again.
+
+    The set `spectators` holds a set spectators, excluding the username of
+    `login_username`.
+
+    Call `send_chat()` can be used to send messages to WebTiles chat.
 
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.watching = False
-        self.game_username = None
+        self.watch_username = None
         self.game_id = None
         self.spectators = set()
 
@@ -267,7 +273,7 @@ class WebTilesGameConnection(WebTilesConnection):
     def disconnect(self):
         yield from super().disconnect()
         self.watching = False
-        self.game_username = None
+        self.watch_username = None
         self.game_id = None
         self.spectators = set()
 
@@ -294,7 +300,7 @@ class WebTilesGameConnection(WebTilesConnection):
 
         yield from self.send({"msg"      : "watch",
                               "username" : username})
-        self.game_username = username
+        self.watch_username = username
         self.game_id = game_id
         self.watching = False
 
@@ -308,7 +314,7 @@ class WebTilesGameConnection(WebTilesConnection):
 
         yield from self.send({"msg" : "go_lobby"})
         self.watching = False
-        self.game_username = None
+        self.watch_username = None
         self.game_id = None
 
     @asyncio.coroutine
@@ -337,7 +343,7 @@ class WebTilesGameConnection(WebTilesConnection):
             self.spectators = set()
             # Exclude ourself from this list.
             for n in names.split(", "):
-                if n != self.username:
+                if n != self.login_username:
                     self.spectators.add(n)
             return True
 
@@ -348,7 +354,7 @@ class WebTilesGameConnection(WebTilesConnection):
 
         if message["msg"] == "game_ended" or message["msg"] == "go_lobby":
             self.watching = False
-            self.game_username = None
+            self.watch_username = None
             self.game_id = None
             return True
 
