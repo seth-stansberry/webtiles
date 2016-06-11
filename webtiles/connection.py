@@ -4,6 +4,8 @@ A WebTiles library for python
 """
 
 import asyncio
+import enum
+import html
 import json
 import logging
 import re
@@ -21,23 +23,27 @@ class WebTilesConnection():
     extend `handle_message()` to handle additional message types or process
     those that `WebTilesConnection` already handles. This class handles
     connecting, logging in, getting a list of games, lobby data, and setting rc
-    files.
+    files. It has preliminary support for the second-version protocol used by
+    the webtiles-changes branch, but not all functionality is implemented.
 
-    The `websocket` property holds the websocket instance and `websocket_url`
-    the url of the current connection. When logged in through either
-    `connect()` or `send_login()`, the `logged_in` property will be true, and
-    `login_username` will hold the current username. The game list is only
-    received after login, and is a dict in the `games` property with each key a
-    descriptive name and each value a game type id. The game id is used when
-    playing and setting the rc file.
+    The `websocket` property holds the websocket instance of the current
+    connection. When logged in through either `connect()` or `send_login()`,
+    the `logged_in` property will be true, and `login_username` will hold the
+    current username. The game list is only received after login, and is a dict
+    in the `games` property with each key a descriptive name and each value a
+    game type id. The game id is used when playing and setting the rc file.
 
-    For lobby data, `lobby_complete` will be True when the server indicates
-    that it's sent a complete set of entries.. Lobby entries are available in
-    `lobby_entries` and can be retrieved by game username and game id with
-    `get_entry()`. Each entry is a dictionary with keys 'username', 'game_id',
-    'id' (a unique game identifier used by the server), 'idle_time', and
-    'spectator_count'. Additionally we add the key 'time_last_update' with the
-    time of the last update to the entry.
+    For lobby data, lobby entries are available in `lobby_entries` and can be
+    retrieved by game username and game id with `get_entry()`. Each entry is a
+    dictionary with keys 'username', 'game_id', 'id' (a unique game identifier
+    used by the server), 'idle_time', and 'spectator_count'. Additionally we
+    add the key 'time_last_update' with the time of the last update to the
+    entry.
+
+    Under the v1 protocol, `lobby_complete` will be True when the server
+    indicates that it's sent a complete set of entries. Under v2 of the
+    protocol, lobbies are sent in batches as necessary, so `lobby_complete` not
+    needed and always None.
 
     Some errors will raise `WebTilesError`, where the first exception argument
     will be an error message.
@@ -49,18 +55,19 @@ class WebTilesConnection():
         self.decomp = zlib.decompressobj(-zlib.MAX_WBITS)
         self.websocket = None
         self.logged_in = False
-        self.websocket_url = None
         self.login_username = None
         self.games = {}
         self.lobby_entries = []
-        self.lobby_complete = False
-
+        self.lobby_complete = None
+        self.protocol_version = None
 
     @asyncio.coroutine
-    def connect(self, websocket_url, username=None, password=None, *args,
-                **kwargs):
-        """Connect to the given websocket URL with optional
-        credentials. Additional arguments are passed to `webscokets.connect()`.
+    def connect(self, websocket_url, username=None, password=None,
+                protocol_version=1, *args, **kwargs):
+        """Connect to the given websocket URL with optional credentials. Use a
+        value of 2 for `protocol_version` on servers running the
+        webtiles-changes branch. Additional arguments are passed to
+        `webscokets.connect()`.
 
         """
 
@@ -72,7 +79,7 @@ class WebTilesConnection():
 
         self.websocket = yield from websockets.connect(websocket_url, *args,
                                                        **kwargs)
-        self.websocket_url = websocket_url
+        self.protocol_version = protocol_version
         if username:
             yield from self.send_login(username, password)
             self.login_username = username
@@ -87,9 +94,15 @@ class WebTilesConnection():
 
         """
 
-        yield from self.send({"msg"      : "login",
-                              "username" : username,
-                              "password" : password})
+        msg = {"msg" : "login",
+               "username" : username,
+               "password" : password}
+        # XXX We don't yet support cookie login in any protocol. This isn't
+        # useful for any project using the library right now, but may be in the
+        # future.
+        if self.protocol_version >= 2:
+            msg["rememberme"] = False
+        yield from self.send(msg)
         self.logged_in = False
         self.login_username = username
 
@@ -108,7 +121,8 @@ class WebTilesConnection():
         self.logged_in = False
         self.games = {}
         self.lobby_entries = []
-        self.lobby_complete = False
+        self.lobby_complete = None
+        self.protocol_version = None
 
     @asyncio.coroutine
     def read(self):
@@ -179,6 +193,30 @@ class WebTilesConnection():
 
         yield from self.websocket.send(json.dumps(message))
 
+    def remove_lobby_entry(self, process_id):
+        """Remove a lobby entry with the given process id. This id is included in
+        a "lobby_remove" message (v1 protocol) or as the "remove" key value of
+        a "lobby" message (v2 protocol).
+
+        """
+
+        for entry in self.lobby_entries:
+            if entry["id"] == process_id:
+                self.lobby_entries.remove(entry)
+                break
+        _log.debug("Unknown lobby id %s", process_id)
+
+    def update_lobby_entries(self, entries):
+        current_time = time.time()
+        for entry in entries:
+            entry["time_last_update"] = current_time
+            cur_entry = self.get_lobby_entry(entry["username"],
+                                             entry["game_id"])
+            if cur_entry:
+                cur_entry.update(entry)
+            else:
+                self.lobby_entries.append(entry)
+
     @asyncio.coroutine
     def handle_message(self, message):
         """Given a response message dictionary, handle the message. Returns True
@@ -202,40 +240,39 @@ class WebTilesConnection():
             self.logged_in = True
             return True
 
-        if message["msg"] == "set_game_links":
-            game_pattern = r'<a href="#play-([^"]+)">([^>]+)</a>'
-            self.games = {}
-            for m in re.finditer(game_pattern, message["content"]):
-                game_id = m.group(1)
-                game_name = m.group(2)
-                self.games[game_name] = game_id
-            return True
+        if self.protocol_version <= 1:
+            if message["msg"] == "lobby_entry":
+                self.update_lobby_entries([message])
 
+            if message["msg"] == "lobby_remove":
+                self.remove_lobby_entry(message["id"])
+                return True
 
-        if message["msg"] == "lobby_entry":
-            entry = self.get_lobby_entry(message["username"],
-                                         message["game_id"])
-            message["time_last_update"] = time.time()
-            if entry:
-                entry.update(message)
-            else:
-                self.lobby_entries.append(message)
-            return True
+            if message["msg"] == "lobby_complete":
+                self.lobby_complete = True
+                return True
 
-        if message["msg"] == "lobby_remove":
-            for entry in self.lobby_entries:
-                if entry["id"] == message["id"]:
-                    self.lobby_entries.remove(entry)
-                    break
-            return True
+            if message["msg"] == "set_game_links":
+                game_pattern = r'<a href="#play-([^"]+)">([^>]+)</a>'
+                self.games = {}
+                for m in re.finditer(game_pattern, message["content"]):
+                    game_id = m.group(1)
+                    game_name = m.group(2)
+                    self.games[game_name] = game_id
+                return True
+
+        elif self.protocol_version >= 2:
+            if message["msg"] == "lobby":
+                if "entries" in message:
+                    self.update_lobby_entries(message["entries"])
+                if "remove" in message:
+                    self.remove_lobby_entry(message["remove"])
+                return True
+
 
         if message["msg"] == "lobby_clear":
             self.lobby_entries = []
             self.lobby_complete = False
-            return True
-
-        if message["msg"] == "lobby_complete":
-            self.lobby_complete = True
             return True
 
         return False
@@ -277,18 +314,45 @@ class WebTilesGameConnection(WebTilesConnection):
         self.game_id = None
         self.spectators = set()
 
+    def parse_chat_message(self, message):
+        """Parse a game chat message, returning a tuple with the sender's
+        username and the chat text. HTML entities in the text are
+        decoded.
+
+        """
+
+        if self.protocol_version <= 1:
+            # Remove html formatting
+            msg_pattern = r'<span[^>]+>([^<]+)</span>: <span[^>]+>([^<]+)</span>'
+            match = re.match(msg_pattern, message["content"])
+            if not match:
+                raise WebTilesError("Unable to parse chat message: %s",
+                                    message["content"])
+
+            sender = match.group(1)
+            chat_text = match.group(2)
+        else:
+            sender = message["sender"]
+            chat_text = message["text"]
+
+        return (sender, html.unescape(chat_text))
+
     @asyncio.coroutine
-    def send_chat(self, message):
-        """Send a WebTiles chat message. Here `message` should be a simple
+    def send_chat(self, chat_text):
+        """Send a WebTiles chat message. Here `chat_text` should be a simple
         string.
 
         """
 
-        if not self.logged_in or not self.watching:
+        if not self.watching:
             raise WebTilesError(
                 "Attempted to send chat message when not watching a game.")
 
-        yield from self.send({"msg" : "chat_msg", "text" : message})
+        elif not self.logged_in:
+            raise WebTilesError(
+                "Attempted to send chat message when not logged in.")
+
+        yield from self.send({"msg" : "chat_msg", "text" : chat_text})
 
     @asyncio.coroutine
     def send_watch_game(self, username, game_id):
@@ -317,13 +381,35 @@ class WebTilesGameConnection(WebTilesConnection):
         self.watch_username = None
         self.game_id = None
 
+    def parse_v1_spectator_message(self, message):
+        # Strip of html tags from names
+        names = re.sub(r'</?(a|span)[^>]*>', "", message["names"])
+        # Ignore the Anons.
+        names = re.sub(r'( and )?\d+ Anon', "", names, 1)
+        self.spectators = set()
+        # Exclude ourself from this list.
+        for n in names.split(", "):
+            if n != self.login_username:
+                self.spectators.add(n)
+
+    def parse_v2_spectator_message(self, message):
+        for entry in message["spectators"]:
+            if entry["name"] != self.login_username:
+                self.spectators.add(entry["name"])
+
     @asyncio.coroutine
     def handle_message(self, message):
-        """In addition to the messages handled by `WebTilesConnection`, this
-        method handles 'watching_started', used to indicate that we
-        successfully watched a game, 'update_spectators', used to provide us
-        with the list of current game spectators, and the 'go_lobby' and
-        'game_ended' messages when watching stops.
+        """
+
+        In addition to the messages handled by `WebTilesConnection`, this method
+        handles "watching_started", used to indicate that we successfully
+        watched a game, "update_spectators", used to provide us with the list
+        of current game spectators, and the "go_lobby" (or "go" in v2 of the
+        protocol) and "game_ended" messages when watching stops.
+
+        Chat messages have a message type of "chat" and are not handled by this
+        method, but `parse_chat_message()` is available in this class to parse
+        these.
 
         """
 
@@ -336,15 +422,10 @@ class WebTilesGameConnection(WebTilesConnection):
             return True
 
         if message["msg"] == "update_spectators":
-            # Strip of html tags from names
-            names = re.sub(r'</?(a|span)[^>]*>', "", message["names"])
-            # Ignore the Anons.
-            names = re.sub(r'( and )?\d+ Anon', "", names, 1)
-            self.spectators = set()
-            # Exclude ourself from this list.
-            for n in names.split(", "):
-                if n != self.login_username:
-                    self.spectators.add(n)
+            if self.protocol_version <= 1:
+                self.parse_v1_spectator_message(message)
+            else:
+                self.parse_v2_spectator_message(message)
             return True
 
         # Messages here truly shouldn't happen until we've
@@ -352,7 +433,11 @@ class WebTilesGameConnection(WebTilesConnection):
         if not self.watching:
             return False
 
-        if message["msg"] == "game_ended" or message["msg"] == "go_lobby":
+        if (message["msg"] == "game_ended"
+            # v1 of the protocol
+            or message["msg"] == "go_lobby"
+            # v2 protocol
+            or message["msg"] == "go" and message["path"] == "/"):
             self.watching = False
             self.watch_username = None
             self.game_id = None
