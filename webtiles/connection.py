@@ -182,6 +182,23 @@ class WebTilesConnection():
                               "contents" : rc_text})
 
     @asyncio.coroutine
+    def get_rc(self, game_id):
+        """Get the user's RC file for the given game on the server. If the
+        connection isn't logged in, raise an exception.
+
+        Any client using this method will need to respond to "rcfile_contents"
+        messages from the WebTiles server, which will have the RC contents in
+        the "contents" key of the message dict.
+
+        """
+
+        if not self.logged_in:
+            raise WebTilesError("Attempted to get RC when not logged in")
+
+        yield from self.send({"msg" : "get_rc", "game_id" : game_id})
+
+
+    @asyncio.coroutine
     def send(self, message):
         """Send a message dictionary to the server. The message should be a dict
         with a 'msg' key having a webtiles message type.
