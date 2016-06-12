@@ -21,12 +21,13 @@ _log.addHandler(logging.StreamHandler())
 
 class RCUpdater(WebTilesConnection):
 
-    def __init__(self, websocket_url, username, password, update_games,
-                 rc_text):
+    def __init__(self, websocket_url, username, password, protocol_version,
+                 update_games, rc_text):
         super().__init__()
         self.websocket_url = websocket_url
         self.username = username
         self.password = password
+        self.protocol_version = protocol_version
         self.update_games = update_games
         self.rc_text = rc_text
 
@@ -38,7 +39,7 @@ class RCUpdater(WebTilesConnection):
         """
 
         yield from self.connect(self.websocket_url, self.username,
-                                self.password)
+                                self.password, self.protocol_version)
 
         while True:
             messages = yield from self.read()
@@ -86,13 +87,15 @@ class RCUpdater(WebTilesConnection):
 
 
 @asyncio.coroutine
-def run_updates(server_urls, username, password, update_games, rc_text):
+def run_updates(servers, username, password, update_games, rc_text):
     """Handle the update to each server."""
 
-    for url in server_urls:
+    for server in servers:
+        url, protocol_version = server
         hostname = urlparse(url).hostname
         _log.info("Updating server %s", hostname)
-        updater = RCUpdater(url, username, password, update_games, rc_text)
+        updater = RCUpdater(url, username, password, protocol_version,
+                            update_games, rc_text)
 
         try:
             yield from updater.start()
@@ -107,23 +110,27 @@ def run_updates(server_urls, username, password, update_games, rc_text):
 
 
 def main():
+    # Each entry is a tuple with url and protocol version.
     known_servers = {
-        "cao"  : "ws://crawl.akrasiac.org:8080/socket",
-        "cbro" : "ws://crawl.berotato.org:8080/socket",
-        "cjr"  : "wss://crawl.jorgrun.rocks:8081/socket",
-        "cue"  : "ws://www.underhound.eu:8080/socket",
-        "cwz"  : "ws://webzook.net:8080/socket",
-        "cxc"  : "ws://crawl.xtahua.com:8080/socket",
-        "lld"  : "ws://lazy-life.ddo.jp:8080/socket",
+        "cao" : ("ws://crawl.akrasiac.org:8080/socket", 1),
+        "cbro" : ("ws://crawl.berotato.org:8080/socket", 1),
+        "cjr" : ("wss://crawl.jorgrun.rocks:8081/socket", 1),
+        "cpo" : ("wss://crawl.project357.org/socket", 2),
+        "cue" : ("ws://www.underhound.eu:8080/socket", 1),
+        "cwz" : ("ws://webzook.net:8080/socket", 1),
+        "cxc" : ("ws://crawl.xtahua.com:8080/socket", 1),
+        "lld" : ("ws://lazy-life.ddo.jp:8080/socket", 1),
     }
-
     server_codes = ", ".join(sorted(known_servers.keys()))
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("servers", nargs='+',
-                        metavar="<server-code|websocket-url>",
-                        help="Servers to update, each a websocket URL or one "
-                        "of: {}".format(server_codes))
+                        metavar=("<server-name|v<N>+url>"),
+                        help=("Servers to update, each a "
+                              "v<protocol-number>+websocket-url pair "
+                              "(protocol optional) or one of of the "
+                              "following server names: {}".format(
+                                  server_codes)))
     parser.add_argument("-f", dest="rc_file", metavar="<rc-file>",
                         default=None, help="The rc file to use.")
     parser.add_argument("-u", dest="username", metavar="<username>",
@@ -145,12 +152,17 @@ def main():
             _log.error("No Crawl RC found and none given with -f")
             sys.exit(1)
 
-    update_urls = []
+    update_servers = []
     for server in args.servers:
-        if re.match("wss?://", server, re.I):
-            update_urls.append(server)
+        match = re.match("(v([0-9]+)\+)?(wss?://.+)", server, re.I)
+        if match:
+            url = match.group(3)
+            protocol_version = 1
+            if match.group(2):
+                protocol_version = int(match.group(2))
+            update_servers.append((url, protocol_version))
         elif server in known_servers:
-            update_urls.append(known_servers[server])
+            update_servers.append(known_servers[server])
         else:
             _log.error("Unrecognized server: %s", server)
             sys.exit(1)
@@ -180,5 +192,5 @@ def main():
     _log.info("Updating RC of user %s for game(s): %s", username,
               ", ".join(update_games))
     ioloop = asyncio.get_event_loop()
-    ioloop.run_until_complete(run_updates(update_urls, username, password,
+    ioloop.run_until_complete(run_updates(update_servers, username, password,
                                           update_games, rc_text))

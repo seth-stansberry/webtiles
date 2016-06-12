@@ -177,8 +177,8 @@ class WebTilesConnection():
             raise WebTilesError(
                 "Attempted to send RC update when not logged in")
 
-        yield from self.send({"msg"      : "set_rc",
-                              "game_id"  : game_id,
+        yield from self.send({"msg" : "set_rc",
+                              "game_id" : game_id,
                               "contents" : rc_text})
 
     @asyncio.coroutine
@@ -269,6 +269,11 @@ class WebTilesConnection():
                     self.remove_lobby_entry(message["remove"])
                 return True
 
+            if message["msg"] == "game_info":
+                for game in message["games"]:
+                    self.games[game["name"]] = game["id"]
+
+                return True
 
         if message["msg"] == "lobby_clear":
             self.lobby_entries = []
