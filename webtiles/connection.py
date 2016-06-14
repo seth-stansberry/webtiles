@@ -4,7 +4,6 @@ A WebTiles library for python
 """
 
 import asyncio
-import enum
 import html
 import json
 import logging
