@@ -414,6 +414,7 @@ class WebTilesGameConnection(WebTilesConnection):
                 self.spectators.add(n)
 
     def parse_v2_spectator_message(self, message):
+        self.spectators = set()
         for entry in message["spectators"]:
             if entry["name"] != self.login_username:
                 self.spectators.add(entry["name"])
