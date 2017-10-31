@@ -116,7 +116,7 @@ def main():
         "cbro" : ("ws://crawl.berotato.org:8080/socket", 1),
         "cjr" : ("wss://crawl.jorgrun.rocks:8081/socket", 1),
         "cpo" : ("wss://crawl.project357.org/socket", 2),
-        "cue" : ("ws://www.underhound.eu:8080/socket", 1),
+        "cue" : ("wss://underhound.eu:8080/socket", 1),
         "cwz" : ("ws://webzook.net:8080/socket", 1),
         "cxc" : ("ws://crawl.xtahua.com:8080/socket", 1),
         "lld" : ("ws://lazy-life.ddo.jp:8080/socket", 1),
